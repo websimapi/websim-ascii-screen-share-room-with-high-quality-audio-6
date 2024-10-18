@@ -52,6 +52,15 @@ body, html {
     font-family: monospace;
     position: relative;
 }
+.audio-visualization {
+    font-family: monospace;
+    white-space: pre;
+    overflow: hidden;
+    background-color: #222;
+    padding: 5px;
+    margin-top: 5px;
+    border-radius: 3px;
+}
 #controls {
     position: fixed;
     bottom: 20px;
@@ -145,7 +154,6 @@ button:disabled {
 
 <script>
 const room = new WebsimSocket();
-const asciiChars = ['@', '#', 'S', '%', '?', '*', '+', ';', ':', ',', '.'];
 const audioChars = ' ▁▂▃▄▅▆▇█';
 let isStreaming = false;
 let streamers = new Set();
@@ -199,55 +207,23 @@ function decodeAudio(encodedAudio) {
     }));
 }
 
-function createAudioBorder(audioData, width, height) {
-    const audioStep = audioData.length / ((width + height) * 2);
-
-    let topBottom = '';
-    for (let i = 0; i < width; i++) {
-        const audioIndex = Math.floor(i * audioStep);
-        topBottom += audioData[audioIndex];
-    }
-
-    let sides = [];
-    for (let i = 0; i < height; i++) {
-        const leftAudioIndex = Math.floor((width + i) * audioStep);
-        const rightAudioIndex = Math.floor((width + height + i) * audioStep);
-        sides.push([audioData[leftAudioIndex], audioData[rightAudioIndex]]);
-    }
-
-    return { topBottom, sides };
-}
-
 function getAsciiFrame(imageData, width, height, audioData) {
     let asciiFrame = '';
+    for (let y = 0; y < height; y += 2) {
+        for (let x = 0; x < width; x++) {
+            const index = (y * width + x) * 4;
+            const brightness = (imageData[index] + imageData[index + 1] + imageData[index + 2]) / 3;
+            const charIndex = Math.floor(brightness / 25);
+            asciiFrame += asciiChars[charIndex] || ' ';
+        }
+        asciiFrame += '\n';
+    }
+    
     if (audioData && audioData.length > 0) {
         const encodedAudio = encodeAudio(audioData);
-        const { topBottom, sides } = createAudioBorder(encodedAudio, width, height);
-        asciiFrame += `${topBottom}\n`;
-        
-        for (let y = 0; y < height; y += 2) {
-            asciiFrame += sides[y][0];
-            for (let x = 0; x < width; x++) {
-                const index = (y * width + x) * 4;
-                const brightness = (imageData[index] + imageData[index + 1] + imageData[index + 2]) / 3;
-                const charIndex = Math.floor(brightness / 25);
-                asciiFrame += asciiChars[charIndex] || ' ';
-            }
-            asciiFrame += sides[y][1] + '\n';
-        }
-        
-        asciiFrame += topBottom;
-    } else {
-        for (let y = 0; y < height; y += 2) {
-            for (let x = 0; x < width; x++) {
-                const index = (y * width + x) * 4;
-                const brightness = (imageData[index] + imageData[index + 1] + imageData[index + 2]) / 3;
-                const charIndex = Math.floor(brightness / 25);
-                asciiFrame += asciiChars[charIndex] || ' ';
-            }
-            asciiFrame += '\n';
-        }
+        asciiFrame += '\n' + encodedAudio;
     }
+    
     return asciiFrame;
 }
 
@@ -332,9 +308,6 @@ function stopStreaming() {
     room.send({ type: 'streamEnded', clientId: room.party.client.id });
 }
 
-document.getElementById('start-btn').addEventListener('click', startStreaming);
-document.getElementById('stop-btn').addEventListener('click', stopStreaming);
-
 function updateAsciiContainer(clientId, frame, username) {
     let container = document.getElementById(`ascii-${clientId}`);
     if (!container) {
@@ -345,13 +318,13 @@ function updateAsciiContainer(clientId, frame, username) {
     }
     
     const lines = frame.split('\n');
-    const audioData = lines[0] + lines[lines.length - 1];
-    const asciiData = lines.slice(1, -1).join('\n');
+    const videoData = lines.slice(0, -1).join('\n');
+    const audioData = lines[lines.length - 1];
     
     const decodedAudio = decodeAudio(audioData);
     playAudio(decodedAudio, clientId);
     
-    container.innerHTML = `${username}:<br>${frame}`;
+    container.innerHTML = `${username}:<br>${videoData}<br><div class="audio-visualization">${audioData}</div>`;
     
     if (!container.querySelector('.peer-volume-control')) {
         const volumeControl = document.createElement('div');
