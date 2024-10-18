@@ -52,15 +52,6 @@ body, html {
     font-family: monospace;
     position: relative;
 }
-.audio-visualization {
-    font-family: monospace;
-    white-space: pre;
-    overflow: hidden;
-    background-color: #222;
-    padding: 5px;
-    margin-top: 5px;
-    border-radius: 3px;
-}
 #controls {
     position: fixed;
     bottom: 20px;
@@ -154,6 +145,7 @@ button:disabled {
 
 <script>
 const room = new WebsimSocket();
+const asciiChars = ['@', '#', 'S', '%', '?', '*', '+', ';', ':', ',', '.'];
 const audioChars = ' ▁▂▃▄▅▆▇█';
 let isStreaming = false;
 let streamers = new Set();
@@ -308,6 +300,9 @@ function stopStreaming() {
     room.send({ type: 'streamEnded', clientId: room.party.client.id });
 }
 
+document.getElementById('start-btn').addEventListener('click', startStreaming);
+document.getElementById('stop-btn').addEventListener('click', stopStreaming);
+
 function updateAsciiContainer(clientId, frame, username) {
     let container = document.getElementById(`ascii-${clientId}`);
     if (!container) {
@@ -318,13 +313,13 @@ function updateAsciiContainer(clientId, frame, username) {
     }
     
     const lines = frame.split('\n');
-    const videoData = lines.slice(0, -1).join('\n');
+    const asciiData = lines.slice(0, -1).join('\n');
     const audioData = lines[lines.length - 1];
     
     const decodedAudio = decodeAudio(audioData);
     playAudio(decodedAudio, clientId);
     
-    container.innerHTML = `${username}:<br>${videoData}<br><div class="audio-visualization">${audioData}</div>`;
+    container.innerHTML = `${username}:<br>${frame}`;
     
     if (!container.querySelector('.peer-volume-control')) {
         const volumeControl = document.createElement('div');
