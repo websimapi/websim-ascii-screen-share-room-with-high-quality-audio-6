@@ -58,6 +58,10 @@
             font-family: monospace;
             position: relative;
         }
+        .colored-ascii {
+            white-space: pre;
+            line-height: 1;
+        }
         #controls {
             position: fixed;
             bottom: 20px;
@@ -67,6 +71,10 @@
             flex-direction: column;
             align-items: center;
             gap: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 10px;
+            max-width: 90%;
         }
         button {
             padding: 10px 20px;
@@ -85,10 +93,19 @@
             background-color: #cccccc;
             cursor: not-allowed;
         }
-        #volume-control, #image-controls {
+        #volume-control, #image-controls, #detail-controls {
             display: flex;
             align-items: center;
             gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+            width: 100%;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 5px;
         }
         .peer-volume-control {
             display: flex;
@@ -96,10 +113,10 @@
             gap: 5px;
             margin-top: 5px;
         }
-        .peer-volume-control label, #image-controls label {
+        .peer-volume-control label, #image-controls label, #detail-controls label {
             font-size: 12px;
         }
-        .peer-volume-control input[type="range"], #image-controls input[type="range"] {
+        .peer-volume-control input[type="range"], #image-controls input[type="range"], #detail-controls input[type="range"] {
             width: 100px;
             -webkit-appearance: none;
             background: #ddd;
@@ -107,10 +124,10 @@
             opacity: 0.7;
             transition: opacity 0.2s;
         }
-        .peer-volume-control input[type="range"]:hover, #image-controls input[type="range"]:hover {
+        .peer-volume-control input[type="range"]:hover, #image-controls input[type="range"]:hover, #detail-controls input[type="range"]:hover {
             opacity: 1;
         }
-        .peer-volume-control input[type="range"]::-webkit-slider-thumb, #image-controls input[type="range"]::-webkit-slider-thumb {
+        .peer-volume-control input[type="range"]::-webkit-slider-thumb, #image-controls input[type="range"]::-webkit-slider-thumb, #detail-controls input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
             width: 15px;
@@ -119,12 +136,57 @@
             cursor: pointer;
             border-radius: 50%;
         }
-        .peer-volume-control input[type="range"]::-moz-range-thumb, #image-controls input[type="range"]::-moz-range-thumb {
+        .peer-volume-control input[type="range"]::-moz-range-thumb, #image-controls input[type="range"]::-moz-range-thumb, #detail-controls input[type="range"]::-moz-range-thumb {
             width: 15px;
             height: 15px;
             background: #4CAF50;
             cursor: pointer;
             border-radius: 50%;
+        }
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            margin: 5px;
+        }
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+            margin: 0 10px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .toggle-slider {
+            background-color: #4CAF50;
+        }
+        input:checked + .toggle-slider:before {
+            transform: translateX(26px);
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
@@ -143,18 +205,43 @@
             <input type="range" id="volume" min="0" max="1" step="0.1" value="1">
         </div>
         <div id="image-controls">
-            <label for="brightness">Brightness:</label>
-            <input type="range" id="brightness" min="0" max="2" step="0.1" value="1">
-            <label for="contrast">Contrast:</label>
-            <input type="range" id="contrast" min="0" max="2" step="0.1" value="1">
-            <label for="blur">Blur:</label>
-            <input type="range" id="blur" min="0" max="10" step="0.5" value="0">
+            <div class="control-group">
+                <label for="brightness">Brightness:</label>
+                <input type="range" id="brightness" min="0" max="2" step="0.1" value="1">
+            </div>
+            <div class="control-group">
+                <label for="contrast">Contrast:</label>
+                <input type="range" id="contrast" min="0" max="2" step="0.1" value="1">
+            </div>
+            <div class="control-group">
+                <label for="blur">Blur:</label>
+                <input type="range" id="blur" min="0" max="10" step="0.5" value="0">
+            </div>
+        </div>
+        <div id="detail-controls">
+            <div class="control-group">
+                <label for="detail-level">Detail Level:</label>
+                <input type="range" id="detail-level" min="1" max="4" step="1" value="2">
+            </div>
+            <div class="control-group">
+                <label for="char-density">Character Density:</label>
+                <input type="range" id="char-density" min="1" max="5" step="1" value="3">
+            </div>
+            <div class="toggle-container">
+                <span>Color Mode:</span>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="color-mode">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
         </div>
     </div>
 
     <script>
         const room = new WebsimSocket();
-        const asciiChars = ['@', '#', 'S', '%', '?', '*', '+', ';', ':', ',', '.'];
+        const monochromeAsciiChars = ['@', '#', 'S', '%', '?', '*', '+', ';', ':', ',', '.'];
+        const denseAsciiChars = ['█', '▓', '▒', '░', '█', '▓', '▒', '░', '█', '▓', '▒', '░'];
+        const sparseAsciiChars = [' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
         const audioChars = ' ▁▂▃▄▅▆▇█';
         let isStreaming = false;
         let streamers = new Set();
@@ -169,9 +256,14 @@
 
         const peerGainNodes = {};
 
+        // Settings
         let brightness = 1;
         let contrast = 1;
         let blur = 0;
+        let detailLevel = 2;
+        let charDensity = 3;
+        let colorMode = false;
+        let asciiChars = monochromeAsciiChars;
 
         async function initializeRoom() {
             await room.initialize();
@@ -181,7 +273,15 @@
             });
             
             room.updatePresence({
-                isStreaming: false
+                isStreaming: false,
+                settings: {
+                    brightness,
+                    contrast,
+                    blur,
+                    detailLevel,
+                    charDensity,
+                    colorMode
+                }
             });
             
             updatePeersUI();
@@ -223,16 +323,52 @@
             }));
         }
 
+        function getAsciiChars() {
+            // Update ASCII character set based on density setting
+            switch(charDensity) {
+                case 1: return sparseAsciiChars.slice(0, 3);
+                case 2: return sparseAsciiChars.slice(0, 5);
+                case 3: return monochromeAsciiChars;
+                case 4: return denseAsciiChars.slice(0, 8);
+                case 5: return denseAsciiChars;
+                default: return monochromeAsciiChars;
+            }
+        }
+
         function getAsciiFrame(imageData, width, height, audioData) {
+            // Determine pixel skip based on detail level
+            const pixelSkip = 5 - detailLevel; // 1=skip 1, 2=skip 2, 3=skip 3, 4=every pixel
+            asciiChars = getAsciiChars();
+            
             let asciiFrame = '';
-            for (let y = 0; y < height; y += 2) {
-                for (let x = 0; x < width; x++) {
-                    const index = (y * width + x) * 4;
-                    const brightness = (imageData[index] + imageData[index + 1] + imageData[index + 2]) / 3;
-                    const charIndex = Math.floor(brightness / 25);
-                    asciiFrame += asciiChars[charIndex] || ' ';
+            let colorData = '';
+            
+            if (colorMode) {
+                asciiFrame += '<div class="colored-ascii">';
+                for (let y = 0; y < height; y += pixelSkip * 2) {
+                    for (let x = 0; x < width; x += pixelSkip) {
+                        const index = (y * width + x) * 4;
+                        const r = imageData[index];
+                        const g = imageData[index + 1];
+                        const b = imageData[index + 2];
+                        const brightness = (r + g + b) / 3;
+                        const charIndex = Math.floor(brightness / 256 * asciiChars.length);
+                        const char = asciiChars[charIndex] || ' ';
+                        asciiFrame += `<span style="color: rgb(${r}, ${g}, ${b})">${char}</span>`;
+                    }
+                    asciiFrame += '<br>';
                 }
-                asciiFrame += '\n';
+                asciiFrame += '</div>';
+            } else {
+                for (let y = 0; y < height; y += pixelSkip * 2) {
+                    for (let x = 0; x < width; x += pixelSkip) {
+                        const index = (y * width + x) * 4;
+                        const brightness = (imageData[index] + imageData[index + 1] + imageData[index + 2]) / 3;
+                        const charIndex = Math.floor(brightness / 256 * asciiChars.length);
+                        asciiFrame += asciiChars[charIndex] || ' ';
+                    }
+                    asciiFrame += '\n';
+                }
             }
             
             if (audioData && audioData.length > 0) {
@@ -240,25 +376,52 @@
                 asciiFrame += '\n' + encodedAudio;
             }
             
+            // Add metadata for settings
+            asciiFrame += `\n${JSON.stringify({
+                colorMode,
+                detailLevel,
+                charDensity
+            })}`;
+            
             return asciiFrame;
         }
 
         async function startStreaming() {
             try {
-                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+                const stream = await navigator.mediaDevices.getDisplayMedia({ 
+                    video: { 
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        frameRate: { ideal: 15 }
+                    }, 
+                    audio: true 
+                });
+                
                 const video = document.createElement('video');
                 video.srcObject = stream;
                 await video.play();
 
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
-                canvas.width = 160;
-                canvas.height = 120;
+                
+                // Adjust canvas size based on detail level
+                const baseWidth = 80 * detailLevel;
+                const baseHeight = 60 * detailLevel;
+                canvas.width = baseWidth;
+                canvas.height = baseHeight;
 
                 isStreaming = true;
                 
                 room.updatePresence({
-                    isStreaming: true
+                    isStreaming: true,
+                    settings: {
+                        brightness,
+                        contrast,
+                        blur,
+                        detailLevel,
+                        charDensity,
+                        colorMode
+                    }
                 });
                 
                 updateButtons();
@@ -274,33 +437,46 @@
                 let audioContext = null;
 
                 if (hasAudio) {
-                    audioContext = new AudioContext();
-                    const source = audioContext.createMediaStreamSource(stream);
-                    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+                    try {
+                        audioContext = new AudioContext();
+                        const source = audioContext.createMediaStreamSource(stream);
+                        const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
-                    source.connect(processor);
-                    processor.connect(audioContext.destination);
+                        source.connect(processor);
+                        processor.connect(audioContext.destination);
 
-                    processor.onaudioprocess = (e) => {
-                        const inputData = e.inputBuffer.getChannelData(0);
-                        audioBuffer.push(...inputData);
+                        processor.onaudioprocess = (e) => {
+                            const inputData = e.inputBuffer.getChannelData(0);
+                            audioBuffer.push(...inputData);
+                            
+                            if (audioBuffer.length >= AUDIO_BUFFER_SIZE) {
+                                sendFrame(video, canvas, ctx, true);
+                            }
+                        };
                         
-                        if (audioBuffer.length >= AUDIO_BUFFER_SIZE) {
-                            sendFrame(video, canvas, ctx, true);
-                        }
-                    };
-                    
-                    audioProcessor = processor;
+                        audioProcessor = processor;
+                    } catch (error) {
+                        console.error('Error setting up audio processing:', error);
+                        // Continue without audio if there's an error
+                    }
                 }
 
                 function sendFrame(video, canvas, ctx, withAudio = hasAudio) {
+                    // Adjust canvas size if detail level changed
+                    const newWidth = 80 * detailLevel;
+                    const newHeight = 60 * detailLevel;
+                    if (canvas.width !== newWidth || canvas.height !== newHeight) {
+                        canvas.width = newWidth;
+                        canvas.height = newHeight;
+                    }
+                    
                     ctx.filter = `brightness(${brightness}) contrast(${contrast}) blur(${blur}px)`;
                     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
                     ctx.filter = 'none';
                     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
                     
                     let audioData = null;
-                    if (withAudio) {
+                    if (withAudio && audioBuffer.length >= AUDIO_BUFFER_SIZE) {
                         audioData = audioBuffer.slice(0, AUDIO_BUFFER_SIZE);
                         audioBuffer = audioBuffer.slice(AUDIO_BUFFER_SIZE);
                     }
@@ -310,7 +486,15 @@
                     room.send({
                         type: 'asciiFrame',
                         frame: asciiFrame,
-                        hasAudio: withAudio,
+                        hasAudio: withAudio && audioData !== null,
+                        settings: {
+                            brightness,
+                            contrast,
+                            blur,
+                            detailLevel,
+                            charDensity,
+                            colorMode
+                        },
                         echo: true
                     });
 
@@ -321,7 +505,7 @@
                 const frameInterval = setInterval(() => {
                     if (isStreaming) {
                         if (!hasAudio || audioBuffer.length < AUDIO_BUFFER_SIZE) {
-                            sendFrame(video, canvas, ctx, hasAudio);
+                            sendFrame(video, canvas, ctx, hasAudio && audioBuffer.length >= AUDIO_BUFFER_SIZE);
                         }
                     } else {
                         clearInterval(frameInterval);
@@ -367,22 +551,47 @@
             }
             
             const lines = frame.split('\n');
-            const asciiData = lines.slice(0, -1).join('\n');
-            const audioData = lines[lines.length - 1];
+            // Last line might be metadata
+            let metadataStr = lines[lines.length - 1];
+            let metadata = {};
+            try {
+                if (metadataStr.startsWith('{') && metadataStr.endsWith('}')) {
+                    metadata = JSON.parse(metadataStr);
+                    // Remove metadata line from display
+                    lines.pop();
+                }
+            } catch (e) {
+                console.warn('Failed to parse metadata:', e);
+            }
             
-            if (audioData && audioData.trim()) {
+            // Check for audio data (second-to-last line if metadata exists)
+            const audioDataIndex = lines.length - 1;
+            const audioData = lines[audioDataIndex];
+            
+            if (audioData && audioData.trim() && audioData.includes('▁▂▃▄▅▆▇█')) {
                 try {
                     const decodedAudio = decodeAudio(audioData);
                     if (decodedAudio.length > 0) {
                         playAudio(decodedAudio, clientId);
                     }
+                    // Remove audio line from display
+                    lines.splice(audioDataIndex, 1);
                 } catch (error) {
                     console.warn('Error decoding audio:', error);
                 }
             }
             
-            container.innerHTML = `${username}:<br>${frame}`;
+            const displayContent = lines.join('\n');
             
+            // If in color mode, the content will include HTML (from spans)
+            if (metadata.colorMode) {
+                container.innerHTML = `${username}:<br>${displayContent}`;
+            } else {
+                // For monochrome, just use text content
+                container.textContent = `${username}:\n${displayContent}`;
+            }
+            
+            // Add volume control if not already present
             if (!container.querySelector('.peer-volume-control')) {
                 const volumeControl = document.createElement('div');
                 volumeControl.className = 'peer-volume-control';
@@ -452,6 +661,14 @@
                     room.send({
                         type: 'asciiFrame',
                         frame: lastFrames[room.clientId],
+                        settings: {
+                            brightness,
+                            contrast,
+                            blur,
+                            detailLevel,
+                            charDensity,
+                            colorMode
+                        },
                         echo: true
                     });
                 }
@@ -460,6 +677,14 @@
                     room.send({
                         type: 'asciiFrame',
                         frame: lastFrames[room.clientId],
+                        settings: {
+                            brightness,
+                            contrast,
+                            blur,
+                            detailLevel,
+                            charDensity,
+                            colorMode
+                        },
                         echo: true
                     });
                 }
@@ -527,6 +752,60 @@
 
         document.getElementById('blur').addEventListener('input', function() {
             blur = this.value;
+        });
+        
+        document.getElementById('detail-level').addEventListener('input', function() {
+            detailLevel = parseInt(this.value);
+            if (isStreaming) {
+                // Update presence with new settings
+                room.updatePresence({
+                    isStreaming: true,
+                    settings: {
+                        brightness,
+                        contrast,
+                        blur,
+                        detailLevel,
+                        charDensity,
+                        colorMode
+                    }
+                });
+            }
+        });
+        
+        document.getElementById('char-density').addEventListener('input', function() {
+            charDensity = parseInt(this.value);
+            if (isStreaming) {
+                // Update presence with new settings
+                room.updatePresence({
+                    isStreaming: true,
+                    settings: {
+                        brightness,
+                        contrast,
+                        blur,
+                        detailLevel,
+                        charDensity,
+                        colorMode
+                    }
+                });
+            }
+        });
+        
+        document.getElementById('color-mode').addEventListener('change', function() {
+            colorMode = this.checked;
+            if (isStreaming) {
+                // Update presence with new settings
+                room.updatePresence({
+                    isStreaming: true,
+                    settings: {
+                        brightness,
+                        contrast,
+                        blur,
+                        detailLevel,
+                        charDensity,
+                        colorMode
+                    }
+                });
+            }
         });
 
         window.addEventListener('load', async () => {
