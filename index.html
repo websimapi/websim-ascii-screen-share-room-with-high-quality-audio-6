@@ -251,8 +251,17 @@
         const masterGainNode = audioCtx.createGain();
         masterGainNode.connect(audioCtx.destination);
 
-        const AUDIO_BUFFER_SIZE = 16384;
-        let audioBuffer = [];
+        // Streaming configuration
+        const AUDIO_BUFFER_SIZE = 8192; 
+        const MAX_QUEUED_FRAMES = 3; 
+        let audioBuffer = new Float32Array(AUDIO_BUFFER_SIZE);
+        let audioBufferPos = 0;
+        let frameQueue = [];
+        let lastFrameTime = 0;
+        let adaptiveFrameInterval = 100; 
+        let networkQuality = 1.0; 
+        let connectionActive = true;
+        let pendingFrameRequest = null;
 
         const peerGainNodes = {};
 
@@ -266,65 +275,118 @@
         let asciiChars = monochromeAsciiChars;
 
         async function initializeRoom() {
-            await room.initialize();
+            try {
+                await room.initialize();
+                
+                room.subscribePresence((presence) => {
+                    updateUI();
+                });
+                
+                room.updatePresence({
+                    isStreaming: false,
+                    settings: {
+                        brightness,
+                        contrast,
+                        blur,
+                        detailLevel,
+                        charDensity,
+                        colorMode
+                    }
+                });
+                
+                room.onmessage = handleMessage;
+                connectionActive = true;
+                
+                updatePeersUI();
+                console.log("Room initialized successfully");
+            } catch (error) {
+                console.error("Room initialization failed:", error);
+                setTimeout(() => initializeRoom(), 3000); 
+            }
+        }
+
+        function compressAudioData(audioData) {
+            const bytes = new Uint8Array(audioData.length);
+            for (let i = 0; i < audioData.length; i++) {
+                bytes[i] = Math.floor((audioData[i] + 1) * 127.5);
+            }
             
-            room.subscribePresence((presence) => {
-                updateUI();
-            });
-            
-            room.updatePresence({
-                isStreaming: false,
-                settings: {
-                    brightness,
-                    contrast,
-                    blur,
-                    detailLevel,
-                    charDensity,
-                    colorMode
+            const decompressed = Array.from(bytes).join(',');
+            return LZString.compressToUTF16(decompressed);
+        }
+
+        function decompressAudioData(compressedData) {
+            try {
+                const decompressed = LZString.decompressFromUTF16(compressedData);
+                if (!decompressed) return new Float32Array(0);
+                
+                const values = decompressed.split(',').map(Number);
+                const audioData = new Float32Array(values.length);
+                
+                for (let i = 0; i < values.length; i++) {
+                    audioData[i] = (values[i] / 127.5) - 1;
                 }
-            });
-            
-            updatePeersUI();
+                
+                return audioData;
+            } catch (error) {
+                console.error("Audio decompression error:", error);
+                return new Float32Array(0);
+            }
         }
 
         function smoothAudio(audioData) {
             const smoothingFactor = 0.1;
             let prevSample = 0;
-            return audioData.map(sample => {
-                const smoothedSample = prevSample + smoothingFactor * (sample - prevSample);
+            const result = new Float32Array(audioData.length);
+            
+            for (let i = 0; i < audioData.length; i++) {
+                const smoothedSample = prevSample + smoothingFactor * (audioData[i] - prevSample);
+                result[i] = smoothedSample;
                 prevSample = smoothedSample;
-                return smoothedSample;
-            });
+            }
+            
+            return result;
         }
 
         function applyFade(audioData, fadeLength = 100) {
-            for (let i = 0; i < fadeLength; i++) {
-                const fadeFactor = i / fadeLength;
-                audioData[i] *= fadeFactor;
-                audioData[audioData.length - 1 - i] *= fadeFactor;
+            const result = new Float32Array(audioData);
+            const fadeLength1 = Math.min(fadeLength, audioData.length / 4);
+            
+            for (let i = 0; i < fadeLength1; i++) {
+                const fadeFactor = i / fadeLength1;
+                result[i] *= fadeFactor;
+                result[result.length - 1 - i] *= fadeFactor;
             }
-            return audioData;
+            
+            return result;
         }
 
         function encodeAudio(audioData) {
             const smoothedAudio = smoothAudio(audioData);
             const fadedAudio = applyFade(smoothedAudio);
-            return fadedAudio.map(v => {
-                const index = Math.min(Math.floor((Math.abs(v) * audioChars.length)), audioChars.length - 1);
-                return audioChars[index];
-            }).join('');
+            
+            const compressedAudio = compressAudioData(fadedAudio);
+            
+            let visualRepresentation = '';
+            
+            for (let i = 0; i < fadedAudio.length; i += 10) {
+                const value = fadedAudio[i];
+                const index = Math.min(Math.floor((Math.abs(value) * audioChars.length)), audioChars.length - 1);
+                visualRepresentation += audioChars[index];
+            }
+            
+            return {
+                visualization: visualRepresentation,
+                data: compressedAudio
+            };
         }
 
-        function decodeAudio(encodedAudio) {
-            if (!encodedAudio) return new Float32Array(0);
-            return new Float32Array(encodedAudio.split('').map(char => {
-                const index = audioChars.indexOf(char);
-                return (index / (audioChars.length - 1)) * 2 - 1;
-            }));
+        function decodeAudio(encodedData) {
+            if (!encodedData || !encodedData.data) return new Float32Array(0);
+            return decompressAudioData(encodedData.data);
         }
 
         function getAsciiChars() {
-            // Update ASCII character set based on density setting
             switch(charDensity) {
                 case 1: return sparseAsciiChars.slice(0, 3);
                 case 2: return sparseAsciiChars.slice(0, 5);
@@ -335,9 +397,8 @@
             }
         }
 
-        function getAsciiFrame(imageData, width, height, audioData) {
-            // Determine pixel skip based on detail level
-            const pixelSkip = 5 - detailLevel; // 1=skip 1, 2=skip 2, 3=skip 3, 4=every pixel
+        function getAsciiFrame(imageData, width, height, audioEncoded) {
+            const pixelSkip = 5 - detailLevel; 
             asciiChars = getAsciiChars();
             
             let asciiFrame = '';
@@ -371,23 +432,98 @@
                 }
             }
             
-            if (audioData && audioData.length > 0) {
-                const encodedAudio = encodeAudio(audioData);
-                asciiFrame += '\n' + encodedAudio;
+            if (audioEncoded && audioEncoded.visualization) {
+                asciiFrame += '\n' + audioEncoded.visualization;
             }
             
-            // Add metadata for settings
-            asciiFrame += `\n${JSON.stringify({
-                colorMode,
-                detailLevel,
-                charDensity
-            })}`;
+            return {
+                asciiContent: asciiFrame,
+                audio: audioEncoded ? audioEncoded.data : null,
+                settings: {
+                    colorMode,
+                    detailLevel,
+                    charDensity
+                }
+            };
+        }
+
+        function compressFrame(frameData) {
+            const frameStr = JSON.stringify(frameData);
+            return LZString.compressToUTF16(frameStr);
+        }
+
+        function decompressFrame(compressedData) {
+            try {
+                const decompressed = LZString.decompressFromUTF16(compressedData);
+                if (!decompressed) return null;
+                
+                return JSON.parse(decompressed);
+            } catch (error) {
+                console.error("Frame decompression error:", error);
+                return null;
+            }
+        }
+
+        function sendQueuedFrames() {
+            if (!connectionActive || frameQueue.length === 0) return;
             
-            return asciiFrame;
+            const latestFrame = frameQueue.pop();
+            frameQueue = [];
+            
+            try {
+                room.send({
+                    type: 'asciiFrame',
+                    compressedFrame: latestFrame,
+                    echo: true
+                });
+                
+                const sendTime = performance.now();
+                const sendInterval = sendTime - lastFrameTime;
+                lastFrameTime = sendTime;
+                
+                adaptiveFrameInterval = Math.max(50, Math.min(200, 100 / networkQuality));
+                
+                scheduleNextFrame();
+            } catch (error) {
+                console.error("Error sending frame:", error);
+                connectionActive = false;
+                setTimeout(() => {
+                    connectionActive = true;
+                    scheduleNextFrame();
+                }, 2000); 
+            }
+        }
+
+        function scheduleNextFrame() {
+            if (pendingFrameRequest) {
+                cancelAnimationFrame(pendingFrameRequest);
+            }
+            
+            pendingFrameRequest = requestAnimationFrame(() => {
+                pendingFrameRequest = null;
+                sendQueuedFrames();
+            });
+        }
+
+        function queueFrame(frameData) {
+            frameQueue.push(frameData);
+            
+            if (frameQueue.length > MAX_QUEUED_FRAMES) {
+                frameQueue = frameQueue.slice(-MAX_QUEUED_FRAMES);
+            }
+            
+            if (frameQueue.length === 1) {
+                scheduleNextFrame();
+            }
         }
 
         async function startStreaming() {
             try {
+                audioBufferPos = 0;
+                audioBuffer = new Float32Array(AUDIO_BUFFER_SIZE);
+                frameQueue = [];
+                lastFrameTime = 0;
+                
                 const stream = await navigator.mediaDevices.getDisplayMedia({ 
                     video: { 
                         width: { ideal: 640 },
@@ -404,7 +540,6 @@
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
                 
-                // Adjust canvas size based on detail level
                 const baseWidth = 80 * detailLevel;
                 const baseHeight = 60 * detailLevel;
                 canvas.width = baseWidth;
@@ -431,7 +566,6 @@
                     echo: true
                 });
 
-                // Check if stream has audio tracks
                 const hasAudio = stream.getAudioTracks().length > 0;
                 let audioProcessor = null;
                 let audioContext = null;
@@ -440,29 +574,85 @@
                     try {
                         audioContext = new AudioContext();
                         const source = audioContext.createMediaStreamSource(stream);
-                        const processor = audioContext.createScriptProcessor(4096, 1, 1);
-
-                        source.connect(processor);
-                        processor.connect(audioContext.destination);
-
-                        processor.onaudioprocess = (e) => {
-                            const inputData = e.inputBuffer.getChannelData(0);
-                            audioBuffer.push(...inputData);
-                            
-                            if (audioBuffer.length >= AUDIO_BUFFER_SIZE) {
-                                sendFrame(video, canvas, ctx, true);
-                            }
-                        };
                         
-                        audioProcessor = processor;
+                        if (audioContext.audioWorklet) {
+                            const worklet = `
+                            class AudioProcessor extends AudioWorkletProcessor {
+                                constructor() {
+                                    super();
+                                    this.bufferSize = 2048;
+                                    this.buffer = new Float32Array(this.bufferSize);
+                                    this.bufferIndex = 0;
+                                }
+                                
+                                process(inputs, outputs, parameters) {
+                                    const input = inputs[0][0];
+                                    if (!input) return true;
+                                    
+                                    for (let i = 0; i < input.length; i++) {
+                                        this.buffer[this.bufferIndex++] = input[i];
+                                        if (this.bufferIndex >= this.bufferSize) {
+                                            this.port.postMessage({buffer: this.buffer});
+                                            this.buffer = new Float32Array(this.bufferSize);
+                                            this.bufferIndex = 0;
+                                        }
+                                    }
+                                    return true;
+                                }
+                            }
+                            
+                            registerProcessor('audio-processor', AudioProcessor);
+                            `;
+                            
+                            const blob = new Blob([worklet], { type: 'text/javascript' });
+                            const url = URL.createObjectURL(blob);
+                            
+                            await audioContext.audioWorklet.addModule(url);
+                            const workletNode = new AudioWorkletNode(audioContext, 'audio-processor');
+                            
+                            workletNode.port.onmessage = (event) => {
+                                if (event.data.buffer) {
+                                    handleAudioBuffer(event.data.buffer);
+                                }
+                            };
+                            
+                            source.connect(workletNode);
+                            workletNode.connect(audioContext.destination);
+                        } else {
+                            const processor = audioContext.createScriptProcessor(2048, 1, 1);
+                            source.connect(processor);
+                            processor.connect(audioContext.destination);
+    
+                            processor.onaudioprocess = (e) => {
+                                const inputData = e.inputBuffer.getChannelData(0);
+                                handleAudioBuffer(inputData);
+                            };
+                            
+                            audioProcessor = processor;
+                        }
                     } catch (error) {
                         console.error('Error setting up audio processing:', error);
-                        // Continue without audio if there's an error
+                    }
+                }
+                
+                function handleAudioBuffer(newAudioData) {
+                    const remainingSpace = AUDIO_BUFFER_SIZE - audioBufferPos;
+                    const bytesToCopy = Math.min(remainingSpace, newAudioData.length);
+                    
+                    for (let i = 0; i < bytesToCopy; i++) {
+                        audioBuffer[audioBufferPos++] = newAudioData[i];
+                    }
+                    
+                    if (audioBufferPos >= AUDIO_BUFFER_SIZE) {
+                        captureAndSendFrame(true);
+                        audioBuffer = new Float32Array(AUDIO_BUFFER_SIZE);
+                        audioBufferPos = 0;
                     }
                 }
 
-                function sendFrame(video, canvas, ctx, withAudio = hasAudio) {
-                    // Adjust canvas size if detail level changed
+                function captureAndSendFrame(includeAudio = false) {
+                    if (!isStreaming) return;
+                    
                     const newWidth = 80 * detailLevel;
                     const newHeight = 60 * detailLevel;
                     if (canvas.width !== newWidth || canvas.height !== newHeight) {
@@ -470,51 +660,42 @@
                         canvas.height = newHeight;
                     }
                     
-                    ctx.filter = `brightness(${brightness}) contrast(${contrast}) blur(${blur}px)`;
-                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                    ctx.filter = 'none';
-                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-                    
-                    let audioData = null;
-                    if (withAudio && audioBuffer.length >= AUDIO_BUFFER_SIZE) {
-                        audioData = audioBuffer.slice(0, AUDIO_BUFFER_SIZE);
-                        audioBuffer = audioBuffer.slice(AUDIO_BUFFER_SIZE);
+                    try {
+                        ctx.filter = `brightness(${brightness}) contrast(${contrast}) blur(${blur}px)`;
+                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                        ctx.filter = 'none';
+                        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                        
+                        let audioEncoded = null;
+                        if (includeAudio && audioBufferPos > 0) {
+                            const audioSlice = audioBuffer.slice(0, audioBufferPos);
+                            audioEncoded = encodeAudio(audioSlice);
+                        }
+                        
+                        const frameData = getAsciiFrame(imageData, canvas.width, canvas.height, audioEncoded);
+                        const compressedFrame = compressFrame(frameData);
+                        
+                        lastFrames[room.clientId] = compressedFrame;
+                        
+                        queueFrame(compressedFrame);
+                    } catch (error) {
+                        console.error("Error capturing frame:", error);
                     }
-                    
-                    const asciiFrame = getAsciiFrame(imageData, canvas.width, canvas.height, audioData);
-
-                    room.send({
-                        type: 'asciiFrame',
-                        frame: asciiFrame,
-                        hasAudio: withAudio && audioData !== null,
-                        settings: {
-                            brightness,
-                            contrast,
-                            blur,
-                            detailLevel,
-                            charDensity,
-                            colorMode
-                        },
-                        echo: true
-                    });
-
-                    lastFrames[room.clientId] = asciiFrame;
                 }
 
-                // Set up regular frame sending even without audio events
                 const frameInterval = setInterval(() => {
                     if (isStreaming) {
-                        if (!hasAudio || audioBuffer.length < AUDIO_BUFFER_SIZE) {
-                            sendFrame(video, canvas, ctx, hasAudio && audioBuffer.length >= AUDIO_BUFFER_SIZE);
-                        }
+                        captureAndSendFrame(audioBufferPos > 0);
                     } else {
                         clearInterval(frameInterval);
                     }
                 }, 100);
 
                 stream.getVideoTracks()[0].onended = () => {
-                    if (frameInterval) clearInterval(frameInterval);
-                    if (audioContext) audioContext.close();
+                    clearInterval(frameInterval);
+                    if (audioContext) {
+                        audioContext.close();
+                    }
                     stopStreaming();
                 };
             } catch (error) {
@@ -525,6 +706,11 @@
 
         function stopStreaming() {
             isStreaming = false;
+            
+            if (pendingFrameRequest) {
+                cancelAnimationFrame(pendingFrameRequest);
+                pendingFrameRequest = null;
+            }
             
             room.updatePresence({
                 isStreaming: false
@@ -541,7 +727,7 @@
         document.getElementById('start-btn').addEventListener('click', startStreaming);
         document.getElementById('stop-btn').addEventListener('click', stopStreaming);
 
-        function updateAsciiContainer(clientId, frame, username) {
+        function updateAsciiContainer(clientId, frameData, username) {
             let container = document.getElementById(`ascii-${clientId}`);
             if (!container) {
                 container = document.createElement('div');
@@ -550,48 +736,23 @@
                 document.getElementById('main-content').appendChild(container);
             }
             
-            const lines = frame.split('\n');
-            // Last line might be metadata
-            let metadataStr = lines[lines.length - 1];
-            let metadata = {};
-            try {
-                if (metadataStr.startsWith('{') && metadataStr.endsWith('}')) {
-                    metadata = JSON.parse(metadataStr);
-                    // Remove metadata line from display
-                    lines.pop();
-                }
-            } catch (e) {
-                console.warn('Failed to parse metadata:', e);
-            }
-            
-            // Check for audio data (second-to-last line if metadata exists)
-            const audioDataIndex = lines.length - 1;
-            const audioData = lines[audioDataIndex];
-            
-            if (audioData && audioData.trim() && audioData.includes('▁▂▃▄▅▆▇█')) {
+            if (frameData.audio) {
                 try {
-                    const decodedAudio = decodeAudio(audioData);
+                    const decodedAudio = decodeAudio({data: frameData.audio});
                     if (decodedAudio.length > 0) {
                         playAudio(decodedAudio, clientId);
                     }
-                    // Remove audio line from display
-                    lines.splice(audioDataIndex, 1);
                 } catch (error) {
                     console.warn('Error decoding audio:', error);
                 }
             }
             
-            const displayContent = lines.join('\n');
-            
-            // If in color mode, the content will include HTML (from spans)
-            if (metadata.colorMode) {
-                container.innerHTML = `${username}:<br>${displayContent}`;
+            if (frameData.settings && frameData.settings.colorMode) {
+                container.innerHTML = `${username}:<br>${frameData.asciiContent}`;
             } else {
-                // For monochrome, just use text content
-                container.textContent = `${username}:\n${displayContent}`;
+                container.textContent = `${username}:\n${frameData.asciiContent}`;
             }
             
-            // Add volume control if not already present
             if (!container.querySelector('.peer-volume-control')) {
                 const volumeControl = document.createElement('div');
                 volumeControl.className = 'peer-volume-control';
@@ -637,18 +798,30 @@
                 const startTime = audioCtx.currentTime + 0.005;
                 source.connect(peerGainNodes[clientId]);
                 source.start(startTime);
+                
+                networkQuality = Math.min(1.0, networkQuality + 0.05);
             } catch (error) {
                 console.error('Error playing audio:', error);
+                networkQuality = Math.max(0.2, networkQuality - 0.1);
             }
         }
 
-        room.onmessage = (event) => {
+        function handleMessage(event) {
             const data = event.data;
             
             if (data.type === 'asciiFrame') {
-                const username = room.peers[data.clientId]?.username || 'Unknown';
-                updateAsciiContainer(data.clientId, data.frame, username);
-                lastFrames[data.clientId] = data.frame;
+                try {
+                    const username = room.peers[data.clientId]?.username || 'Unknown';
+                    const frameData = decompressFrame(data.compressedFrame);
+                    
+                    if (frameData) {
+                        updateAsciiContainer(data.clientId, frameData, username);
+                        lastFrames[data.clientId] = data.compressedFrame;
+                    }
+                } catch (error) {
+                    console.error("Error processing frame:", error);
+                    networkQuality = Math.max(0.2, networkQuality - 0.1);
+                }
             } else if (data.type === 'streamEnded') {
                 streamers.delete(data.clientId);
                 delete lastFrames[data.clientId];
@@ -657,39 +830,23 @@
                 streamers.add(data.clientId);
                 updateUI();
             } else if (data.type === 'requestLastFrame') {
-                if (isStreaming) {
+                if (isStreaming && lastFrames[room.clientId]) {
                     room.send({
                         type: 'asciiFrame',
-                        frame: lastFrames[room.clientId],
-                        settings: {
-                            brightness,
-                            contrast,
-                            blur,
-                            detailLevel,
-                            charDensity,
-                            colorMode
-                        },
+                        compressedFrame: lastFrames[room.clientId],
                         echo: true
                     });
                 }
             } else if (data.type === 'connected') {
-                if (isStreaming) {
+                if (isStreaming && lastFrames[room.clientId]) {
                     room.send({
                         type: 'asciiFrame',
-                        frame: lastFrames[room.clientId],
-                        settings: {
-                            brightness,
-                            contrast,
-                            blur,
-                            detailLevel,
-                            charDensity,
-                            colorMode
-                        },
+                        compressedFrame: lastFrames[room.clientId],
                         echo: true
                     });
                 }
             }
-        };
+        }
 
         function updateButtons() {
             const startBtn = document.getElementById('start-btn');
@@ -719,11 +876,15 @@
             streamers.forEach(clientId => {
                 if (lastFrames[clientId]) {
                     const username = room.peers[clientId]?.username || 'Unknown';
-                    updateAsciiContainer(clientId, lastFrames[clientId], username);
+                    const frameData = decompressFrame(lastFrames[clientId]);
+                    if (frameData) {
+                        updateAsciiContainer(clientId, frameData, username);
+                    }
                 }
             });
             
             updateButtons();
+            updatePeersUI();
         }
 
         function updatePeersUI() {
@@ -757,7 +918,6 @@
         document.getElementById('detail-level').addEventListener('input', function() {
             detailLevel = parseInt(this.value);
             if (isStreaming) {
-                // Update presence with new settings
                 room.updatePresence({
                     isStreaming: true,
                     settings: {
@@ -775,7 +935,6 @@
         document.getElementById('char-density').addEventListener('input', function() {
             charDensity = parseInt(this.value);
             if (isStreaming) {
-                // Update presence with new settings
                 room.updatePresence({
                     isStreaming: true,
                     settings: {
@@ -793,7 +952,6 @@
         document.getElementById('color-mode').addEventListener('change', function() {
             colorMode = this.checked;
             if (isStreaming) {
-                // Update presence with new settings
                 room.updatePresence({
                     isStreaming: true,
                     settings: {
