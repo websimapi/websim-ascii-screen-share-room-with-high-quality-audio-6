@@ -268,49 +268,69 @@
                     echo: true
                 });
 
-                const audioContext = new AudioContext();
-                const source = audioContext.createMediaStreamSource(stream);
-                const processor = audioContext.createScriptProcessor(4096, 1, 1);
+                // Check if stream has audio tracks
+                const hasAudio = stream.getAudioTracks().length > 0;
+                let audioProcessor = null;
+                let audioContext = null;
 
-                source.connect(processor);
-                processor.connect(audioContext.destination);
+                if (hasAudio) {
+                    audioContext = new AudioContext();
+                    const source = audioContext.createMediaStreamSource(stream);
+                    const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
-                processor.onaudioprocess = (e) => {
-                    const inputData = e.inputBuffer.getChannelData(0);
-                    audioBuffer.push(...inputData);
+                    source.connect(processor);
+                    processor.connect(audioContext.destination);
+
+                    processor.onaudioprocess = (e) => {
+                        const inputData = e.inputBuffer.getChannelData(0);
+                        audioBuffer.push(...inputData);
+                        
+                        if (audioBuffer.length >= AUDIO_BUFFER_SIZE) {
+                            sendFrame(video, canvas, ctx, true);
+                        }
+                    };
                     
-                    if (audioBuffer.length >= AUDIO_BUFFER_SIZE) {
-                        sendFrame(video, canvas, ctx);
-                    }
-                };
+                    audioProcessor = processor;
+                }
 
-                function sendFrame(video, canvas, ctx) {
+                function sendFrame(video, canvas, ctx, withAudio = hasAudio) {
                     ctx.filter = `brightness(${brightness}) contrast(${contrast}) blur(${blur}px)`;
                     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
                     ctx.filter = 'none';
                     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
                     
-                    const audioData = audioBuffer.slice(0, AUDIO_BUFFER_SIZE);
-                    audioBuffer = audioBuffer.slice(AUDIO_BUFFER_SIZE);
+                    let audioData = null;
+                    if (withAudio) {
+                        audioData = audioBuffer.slice(0, AUDIO_BUFFER_SIZE);
+                        audioBuffer = audioBuffer.slice(AUDIO_BUFFER_SIZE);
+                    }
                     
                     const asciiFrame = getAsciiFrame(imageData, canvas.width, canvas.height, audioData);
 
                     room.send({
                         type: 'asciiFrame',
                         frame: asciiFrame,
+                        hasAudio: withAudio,
                         echo: true
                     });
 
                     lastFrames[room.clientId] = asciiFrame;
                 }
 
-                setInterval(() => {
-                    if (isStreaming && audioBuffer.length < AUDIO_BUFFER_SIZE) {
-                        sendFrame(video, canvas, ctx);
+                // Set up regular frame sending even without audio events
+                const frameInterval = setInterval(() => {
+                    if (isStreaming) {
+                        if (!hasAudio || audioBuffer.length < AUDIO_BUFFER_SIZE) {
+                            sendFrame(video, canvas, ctx, hasAudio);
+                        }
+                    } else {
+                        clearInterval(frameInterval);
                     }
                 }, 100);
 
                 stream.getVideoTracks()[0].onended = () => {
+                    if (frameInterval) clearInterval(frameInterval);
+                    if (audioContext) audioContext.close();
                     stopStreaming();
                 };
             } catch (error) {
@@ -350,9 +370,15 @@
             const asciiData = lines.slice(0, -1).join('\n');
             const audioData = lines[lines.length - 1];
             
-            const decodedAudio = decodeAudio(audioData);
-            if (decodedAudio.length > 0) {
-                playAudio(decodedAudio, clientId);
+            if (audioData && audioData.trim()) {
+                try {
+                    const decodedAudio = decodeAudio(audioData);
+                    if (decodedAudio.length > 0) {
+                        playAudio(decodedAudio, clientId);
+                    }
+                } catch (error) {
+                    console.warn('Error decoding audio:', error);
+                }
             }
             
             container.innerHTML = `${username}:<br>${frame}`;
@@ -386,21 +412,25 @@
                 return;
             }
 
-            const audioBuffer = audioCtx.createBuffer(1, audioData.length, audioCtx.sampleRate);
-            const channelData = audioBuffer.getChannelData(0);
-            channelData.set(audioData);
+            try {
+                const audioBuffer = audioCtx.createBuffer(1, audioData.length, audioCtx.sampleRate);
+                const channelData = audioBuffer.getChannelData(0);
+                channelData.set(audioData);
 
-            const source = audioCtx.createBufferSource();
-            source.buffer = audioBuffer;
-            
-            if (!peerGainNodes[clientId]) {
-                peerGainNodes[clientId] = audioCtx.createGain();
-                peerGainNodes[clientId].connect(masterGainNode);
+                const source = audioCtx.createBufferSource();
+                source.buffer = audioBuffer;
+                
+                if (!peerGainNodes[clientId]) {
+                    peerGainNodes[clientId] = audioCtx.createGain();
+                    peerGainNodes[clientId].connect(masterGainNode);
+                }
+                
+                const startTime = audioCtx.currentTime + 0.005;
+                source.connect(peerGainNodes[clientId]);
+                source.start(startTime);
+            } catch (error) {
+                console.error('Error playing audio:', error);
             }
-            
-            const startTime = audioCtx.currentTime + 0.005;
-            source.connect(peerGainNodes[clientId]);
-            source.start(startTime);
         }
 
         room.onmessage = (event) => {
