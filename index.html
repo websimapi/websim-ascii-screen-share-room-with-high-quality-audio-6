@@ -90,7 +90,7 @@
             background-color: #45a049;
         }
         button:disabled {
-            background-color: #cccccc;
+            background-color: #cccc;
             cursor: not-allowed;
         }
         #volume-control, #image-controls, #detail-controls {
@@ -127,7 +127,7 @@
         .peer-volume-control input[type="range"]:hover, #image-controls input[type="range"]:hover, #detail-controls input[type="range"]:hover {
             opacity: 1;
         }
-        .peer-volume-control input[type="range"]::-webkit-slider-thumb, #image-controls input[type="range"]::-webkit-slider-thumb, #detail-controls input[type="range"]::-webkit-slider-thumb {
+        .peer-volume-control input[type="range"]:hover::-webkit-slider-thumb, #image-controls input[type="range"]:hover::-webkit-slider-thumb, #detail-controls input[type="range"]:hover::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
             width: 15px;
@@ -154,11 +154,6 @@
             width: 50px;
             height: 24px;
             margin: 0 10px;
-        }
-        .toggle-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
         }
         .toggle-slider {
             position: absolute;
@@ -217,6 +212,21 @@
                 <label for="blur">Blur:</label>
                 <input type="range" id="blur" min="0" max="10" step="0.5" value="0">
             </div>
+            <div class="control-group">
+                <label for="detail-level">Detail Level:</label>
+                <input type="range" id="detail-level" min="1" max="4" step="1" value="2">
+            </div>
+            <div class="control-group">
+                <label for="char-density">Character Density:</label>
+                <input type="range" id="char-density" min="1" max="5" step="1" value="3">
+            </div>
+            <div class="toggle-container">
+                <span>Color Mode:</span>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="color-mode">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
         </div>
         <div id="detail-controls">
             <div class="control-group">
@@ -237,58 +247,70 @@
         </div>
     </div>
 
-    <script>
-        const room = new WebsimSocket();
-        const monochromeAsciiChars = ['@', '#', 'S', '%', '?', '*', '+', ';', ':', ',', '.'];
-        const denseAsciiChars = ['█', '▓', '▒', '░', '█', '▓', '▒', '░', '█', '▓', '▒', '░'];
-        const sparseAsciiChars = [' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
-        const audioChars = ' ▁▂▃▄▅▆▇█';
-        let isStreaming = false;
-        let streamers = new Set();
-        let lastFrames = {};
+<script>
+    const room = new WebsimSocket();
+    const monochromeAsciiChars = ['@', '#', 'S', '%', '?', '*', '+', ';', ':', ',', '.'];
+    const denseAsciiChars = ['█', '▓', '▒', '░', '█', '▓', '▒', '░', '█', '▓', '▒', '░'];
+    const sparseAsciiChars = [' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
+    const audioChars = ' ▁▂▃▄▅▆▇█';
+    let isStreaming = false;
+    let streamers = new Set();
+    let lastFrames = {};
 
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const masterGainNode = audioCtx.createGain();
-        masterGainNode.connect(audioCtx.destination);
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const masterGainNode = audioCtx.createGain();
+    masterGainNode.connect(audioCtx.destination);
 
-        const AUDIO_BUFFER_SIZE = 16384;
-        let audioBuffer = [];
+    const AUDIO_BUFFER_SIZE = 16384;
+    let audioBuffer = [];
 
-        const peerGainNodes = {};
+    const peerGainNodes = {};
 
-        // Stream quality and performance management
-        const streamBuffer = {
-            frames: [],
-            maxSize: 10,
-            lastSentTime: 0,
-            targetInterval: 100, // ms between frames
-            adaptiveInterval: 100, // Will adjust based on performance
-            consecutiveSlowFrames: 0,
-            qualityReductionFactor: 1, // Will reduce if network is slow
-            isProcessing: false
-        };
+    // Improved stream quality and performance management
+    const streamBuffer = {
+        frames: [],
+        maxSize: 15, // Increased buffer size
+        lastSentTime: 0,
+        targetInterval: 80, // Decreased target interval for more responsiveness
+        adaptiveInterval: 80,
+        consecutiveSlowFrames: 0,
+        qualityReductionFactor: 1,
+        isProcessing: false,
+        droppedFrames: 0,
+        totalFrames: 0,
+        lastAdaptationTime: 0,
+        adaptationCooldown: 2000, // 2 seconds cooldown between adaptations
+        adaptiveThrottling: false,
+        minFrameInterval: 33 // ~30fps max
+    };
 
-        // Network performance tracking
-        const networkStats = {
-            lastSentTime: 0,
-            framesSent: 0,
-            bytesSent: 0,
-            lastNetworkCheckTime: 0,
-            averageTransmissionTime: 100,
-            transmissionTimes: [],
-            maxTransmissionTimes: 20
-        };
+    // Network performance tracking with improved metrics
+    const networkStats = {
+        lastSentTime: 0,
+        framesSent: 0,
+        bytesSent: 0,
+        lastNetworkCheckTime: 0,
+        averageTransmissionTime: 100,
+        transmissionTimes: [],
+        maxTransmissionTimes: 30,
+        bandwidthEstimate: 0,
+        retryCount: 0,
+        maxRetries: 5,
+        bufferRatio: 0, // Current buffer size / max buffer size
+        lastSuccessfulTransmission: 0
+    };
 
-        // Settings
-        let brightness = 1;
-        let contrast = 1;
-        let blur = 0;
-        let detailLevel = 2;
-        let charDensity = 3;
-        let colorMode = false;
-        let asciiChars = monochromeAsciiChars;
+    // Settings
+    let brightness = 1;
+    let contrast = 1;
+    let blur = 0;
+    let detailLevel = 2;
+    let charDensity = 3;
+    let colorMode = false;
+    let asciiChars = monochromeAsciiChars;
 
-        async function initializeRoom() {
+    async function initializeRoom() {
+        try {
             await room.initialize();
             
             room.subscribePresence((presence) => {
@@ -305,291 +327,67 @@
                     charDensity,
                     colorMode
                 }
-            });
+            ));
             
             updatePeersUI();
-        }
-
-        function smoothAudio(audioData) {
-            const smoothingFactor = 0.1;
-            let prevSample = 0;
-            return audioData.map(sample => {
-                const smoothedSample = prevSample + smoothingFactor * (sample - prevSample);
-                prevSample = smoothedSample;
-                return smoothedSample;
-            });
-        }
-
-        function applyFade(audioData, fadeLength = 100) {
-            for (let i = 0; i < fadeLength; i++) {
-                const fadeFactor = i / fadeLength;
-                audioData[i] *= fadeFactor;
-                audioData[audioData.length - 1 - i] *= fadeFactor;
-            }
-            return audioData;
-        }
-
-        function encodeAudio(audioData) {
-            const smoothedAudio = smoothAudio(audioData);
-            const fadedAudio = applyFade(smoothedAudio);
-            return fadedAudio.map(v => {
-                const index = Math.min(Math.floor((Math.abs(v) * audioChars.length)), audioChars.length - 1);
-                return audioChars[index];
-            }).join('');
-        }
-
-        function decodeAudio(encodedAudio) {
-            if (!encodedAudio) return new Float32Array(0);
-            return new Float32Array(encodedAudio.split('').map(char => {
-                const index = audioChars.indexOf(char);
-                return (index / (audioChars.length - 1)) * 2 - 1;
-            }));
-        }
-
-        function getAsciiChars() {
-            // Update ASCII character set based on density setting
-            switch(charDensity) {
-                case 1: return sparseAsciiChars.slice(0, 3);
-                case 2: return sparseAsciiChars.slice(0, 5);
-                case 3: return monochromeAsciiChars;
-                case 4: return denseAsciiChars.slice(0, 8);
-                case 5: return denseAsciiChars;
-                default: return monochromeAsciiChars;
-            }
-        }
-
-        function getAsciiFrame(imageData, width, height, audioData) {
-            // Apply adaptive quality: increased pixel skip when network is slow
-            const adaptiveDetailLevel = Math.max(1, Math.min(4, detailLevel / streamBuffer.qualityReductionFactor));
-            const pixelSkip = 5 - Math.floor(adaptiveDetailLevel); // 1=skip 1, 2=skip 2, 3=skip 3, 4=every pixel
-            asciiChars = getAsciiChars();
-            
-            let asciiFrame = '';
-            let colorData = '';
-            
-            if (colorMode) {
-                asciiFrame += '<div class="colored-ascii">';
-                for (let y = 0; y < height; y += pixelSkip * 2) {
-                    for (let x = 0; x < width; x += pixelSkip) {
-                        const index = (y * width + x) * 4;
-                        const r = imageData[index];
-                        const g = imageData[index + 1];
-                        const b = imageData[index + 2];
-                        const brightness = (r + g + b) / 3;
-                        const charIndex = Math.floor(brightness / 256 * asciiChars.length);
-                        const char = asciiChars[charIndex] || ' ';
-                        asciiFrame += `<span style="color: rgb(${r}, ${g}, ${b})">${char}</span>`;
-                    }
-                    asciiFrame += '<br>';
-                }
-                asciiFrame += '</div>';
-            } else {
-                for (let y = 0; y < height; y += pixelSkip * 2) {
-                    for (let x = 0; x < width; x += pixelSkip) {
-                        const index = (y * width + x) * 4;
-                        const brightness = (imageData[index] + imageData[index + 1] + imageData[index + 2]) / 3;
-                        const charIndex = Math.floor(brightness / 256 * asciiChars.length);
-                        asciiFrame += asciiChars[charIndex] || ' ';
-                    }
-                    asciiFrame += '\n';
-                }
-            }
-            
-            if (audioData && audioData.length > 0) {
-                const encodedAudio = encodeAudio(audioData);
-                asciiFrame += '\n' + encodedAudio;
-            }
-            
-            // Add metadata for settings
-            asciiFrame += `\n${JSON.stringify({
-                colorMode,
-                detailLevel: adaptiveDetailLevel,
-                charDensity
-            })}`;
-            
-            return asciiFrame;
+        } catch (error) {
+            console.error('Failed to initialize room:', error);
+            // Retry connection after a delay
+            setTimeout(initializeRoom, 3000);
         }
         
-        // Process and send the next queued frame
-        async function processStreamBuffer() {
-            if (streamBuffer.isProcessing || streamBuffer.frames.length === 0) return;
-            
-            streamBuffer.isProcessing = true;
-            
-            const now = Date.now();
-            // Adapt the send rate based on network performance
-            if (now - streamBuffer.lastSentTime < streamBuffer.adaptiveInterval) {
-                streamBuffer.isProcessing = false;
-                return;
-            }
-            
-            // If buffer is backing up, skip frames to catch up
-            if (streamBuffer.frames.length > streamBuffer.maxSize / 2) {
-                // Skip frames if queue is backing up, keep most recent
-                if (streamBuffer.frames.length > 3) {
-                    const keepFrame = streamBuffer.frames.pop();
-                    streamBuffer.frames = [keepFrame];
-                    console.log("Stream backed up - skipping frames to catch up");
-                }
-            }
-            
-            const frameData = streamBuffer.frames.shift();
-            if (!frameData) {
-                streamBuffer.isProcessing = false;
-                return;
-            }
-            
-            // Compress the frame data to reduce bandwidth
-            try {
-                const compressedFrame = LZString.compressToUTF16(frameData.frame);
-                const compressionRatio = compressedFrame.length / frameData.frame.length;
-                
-                networkStats.lastSentTime = now;
-                const sendStartTime = performance.now();
-                
-                room.send({
-                    type: 'asciiFrame',
-                    frame: compressedFrame,
-                    compressed: true,
-                    compressionRatio,
-                    hasAudio: frameData.hasAudio,
-                    timestamp: now,
-                    settings: frameData.settings,
-                    echo: true
-                });
-                
-                lastFrames[room.clientId] = frameData.frame;
-                streamBuffer.lastSentTime = now;
-                
-                // Track network performance
-                networkStats.framesSent++;
-                networkStats.bytesSent += compressedFrame.length * 2; // UTF16 chars are 2 bytes
-                
-                // Every 20 frames, adjust quality based on performance
-                if (networkStats.framesSent % 20 === 0) {
-                    adjustStreamQuality();
-                }
-                
-                const sendEndTime = performance.now();
-                const transmissionTime = sendEndTime - sendStartTime;
-                
-                // Keep track of transmission times for adaptive quality
-                networkStats.transmissionTimes.push(transmissionTime);
-                if (networkStats.transmissionTimes.length > networkStats.maxTransmissionTimes) {
-                    networkStats.transmissionTimes.shift();
-                }
-                
-                // Calculate average transmission time
-                networkStats.averageTransmissionTime = networkStats.transmissionTimes.reduce((sum, time) => sum + time, 0) / 
-                                                       networkStats.transmissionTimes.length;
-                
-                // Adapt the interval based on transmission time
-                streamBuffer.adaptiveInterval = Math.max(
-                    streamBuffer.targetInterval,
-                    networkStats.averageTransmissionTime * 1.2  // Add 20% buffer
-                );
-                
-            } catch (error) {
-                console.error('Error sending frame:', error);
-            }
-            
-            streamBuffer.isProcessing = false;
-            
-            // Continue processing if there are more frames
-            if (streamBuffer.frames.length > 0) {
-                setTimeout(processStreamBuffer, 0);
-            }
-        }
-        
-        // Adjust stream quality based on network performance
-        function adjustStreamQuality() {
-            const now = Date.now();
-            
-            // Only check every second
-            if (now - networkStats.lastNetworkCheckTime < 1000) return;
-            networkStats.lastNetworkCheckTime = now;
-            
-            // If transmission is taking too long or buffer is backing up
-            if (networkStats.averageTransmissionTime > streamBuffer.targetInterval * 2 || 
-                streamBuffer.frames.length > streamBuffer.maxSize * 0.7) {
-                
-                streamBuffer.consecutiveSlowFrames++;
-                
-                // After 3 consecutive slow periods, reduce quality
-                if (streamBuffer.consecutiveSlowFrames >= 3) {
-                    streamBuffer.qualityReductionFactor = Math.min(3, streamBuffer.qualityReductionFactor + 0.5);
-                    streamBuffer.adaptiveInterval = Math.min(500, streamBuffer.adaptiveInterval * 1.2);
-                    streamBuffer.consecutiveSlowFrames = 0;
-                    console.log(`Reducing quality. New reduction factor: ${streamBuffer.qualityReductionFactor}`);
-                }
-            } else {
-                // If things are going well, gradually improve quality
-                streamBuffer.consecutiveSlowFrames = 0;
-                if (networkStats.averageTransmissionTime < streamBuffer.targetInterval * 0.5 && 
-                    streamBuffer.frames.length < 2) {
-                    streamBuffer.qualityReductionFactor = Math.max(1, streamBuffer.qualityReductionFactor - 0.2);
-                    streamBuffer.adaptiveInterval = Math.max(
-                        streamBuffer.targetInterval,
-                        streamBuffer.adaptiveInterval * 0.9
-                    );
-                    console.log(`Improving quality. New reduction factor: ${streamBuffer.qualityReductionFactor}`);
-                }
-            }
-        }
-        
-        // Queue a frame for sending
-        function queueFrame(frame, hasAudio, settings) {
-            streamBuffer.frames.push({
-                frame,
-                hasAudio,
-                settings,
-                timestamp: Date.now()
-            });
-            
-            // If we're not already processing, start processing the buffer
-            if (!streamBuffer.isProcessing) {
-                processStreamBuffer();
-            }
-        }
+        // Connection state
+        let connectionReady = false;
+        let pendingOperations = [];
 
-        async function startStreaming() {
-            try {
-                const stream = await navigator.mediaDevices.getDisplayMedia({ 
-                    video: { 
-                        width: { ideal: 640 },
-                        height: { ideal: 480 },
-                        frameRate: { ideal: 15 }
-                    }, 
-                    audio: true 
-                });
-                
-                const video = document.createElement('video');
-                video.srcObject = stream;
-                await video.play();
+    async function startStreaming() {
+        try {
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+                video: {
+                    width: {
+                        ideal: 640
+                    },
+                    height: {
+                        ideal: 480
+                    },
+                    audio: true
+                }));
+            
+            const video = document.createElement('video'));
+            video.srcObject = stream;
+            await video.play();
 
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                
-                // Adjust canvas size based on detail level
-                const baseWidth = 80 * detailLevel;
-                const baseHeight = 60 * detailLevel;
-                canvas.width = baseWidth;
-                canvas.height = baseHeight;
+            const canvas = document.createElement('canvas'));
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            
+            // Adjust canvas size based on detail level
+            const baseWidth = 80 * detailLevel;
+            const baseHeight = 60 * detailLevel;
+            canvas.width = baseWidth;
+            canvas.height = baseHeight;
 
-                isStreaming = true;
-                
-                // Reset stream buffer and network stats
-                streamBuffer.frames = [];
-                streamBuffer.lastSentTime = 0;
-                streamBuffer.adaptiveInterval = streamBuffer.targetInterval;
-                streamBuffer.qualityReductionFactor = 1;
-                streamBuffer.consecutiveSlowFrames = 0;
-                
-                networkStats.framesSent = 0;
-                networkStats.bytesSent = 0;
-                networkStats.transmissionTimes = [];
-                networkStats.lastNetworkCheckTime = Date.now();
-                
+            isStreaming = true;
+            
+            // Reset stream buffer and network stats
+            streamBuffer.frames = [];
+            streamBuffer.lastSentTime = 0;
+            streamBuffer.adaptiveInterval = streamBuffer.targetInterval;
+            streamBuffer.qualityReductionFactor = 1;
+            streamBuffer.consecutiveSlowFrames = 0;
+            streamBuffer.droppedFrames = 0;
+            streamBuffer.totalFrames = 0;
+            streamBuffer.lastAdaptationTime = Date.now();
+            streamBuffer.adaptiveThrottling = false;
+            
+            networkStats.framesSent = 0;
+            networkStats.bytesSent = 0;
+            networkStats.transmissionTimes = [];
+            networkStats.lastNetworkCheckTime = Date.now();
+            networkStats.retryCount = 0;
+            networkStats.bandwidthEstimate = 0;
+            networkStats.lastSuccessfulTransmission = Date.now();
+            
+            const updatePresence = () => {
                 room.updatePresence({
                     isStreaming: true,
                     settings: {
@@ -600,224 +398,249 @@
                         charDensity,
                         colorMode
                     }
-                });
-                
-                updateButtons();
-
-                room.send({
-                    type: 'streamStarted',
-                    echo: true
-                });
-
-                // Check if stream has audio tracks
-                const hasAudio = stream.getAudioTracks().length > 0;
-                let audioProcessor = null;
-                let audioContext = null;
-
-                if (hasAudio) {
-                    try {
-                        audioContext = new AudioContext();
-                        const source = audioContext.createMediaStreamSource(stream);
-                        const processor = audioContext.createScriptProcessor(4096, 1, 1);
-
-                        source.connect(processor);
-                        processor.connect(audioContext.destination);
-
-                        processor.onaudioprocess = (e) => {
-                            const inputData = e.inputBuffer.getChannelData(0);
-                            audioBuffer.push(...inputData);
-                            
-                            if (audioBuffer.length >= AUDIO_BUFFER_SIZE) {
-                                captureFrame(video, canvas, ctx, true);
-                            }
-                        };
-                        
-                        audioProcessor = processor;
-                    } catch (error) {
-                        console.error('Error setting up audio processing:', error);
-                        // Continue without audio if there's an error
-                    }
-                }
-
-                function captureFrame(video, canvas, ctx, withAudio = hasAudio) {
-                    // Skip frame if we're backed up
-                    if (streamBuffer.frames.length >= streamBuffer.maxSize) {
-                        console.log("Buffer full, skipping frame");
-                        return;
-                    }
-                    
-                    // If not enough time has passed since last capture, skip this frame
-                    const now = Date.now();
-                    if (now - streamBuffer.lastSentTime < streamBuffer.adaptiveInterval / 2) {
-                        return;
-                    }
-                    
-                    // Adjust canvas size if detail level changed
-                    const newWidth = 80 * Math.max(1, Math.min(4, detailLevel / streamBuffer.qualityReductionFactor));
-                    const newHeight = 60 * Math.max(1, Math.min(4, detailLevel / streamBuffer.qualityReductionFactor));
-                    if (canvas.width !== newWidth || canvas.height !== newHeight) {
-                        canvas.width = newWidth;
-                        canvas.height = newHeight;
-                    }
-                    
-                    ctx.filter = `brightness(${brightness}) contrast(${contrast}) blur(${blur}px)`;
-                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                    ctx.filter = 'none';
-                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-                    
-                    let audioData = null;
-                    if (withAudio && audioBuffer.length >= AUDIO_BUFFER_SIZE) {
-                        audioData = audioBuffer.slice(0, AUDIO_BUFFER_SIZE);
-                        audioBuffer = audioBuffer.slice(AUDIO_BUFFER_SIZE);
-                    }
-                    
-                    const asciiFrame = getAsciiFrame(imageData, canvas.width, canvas.height, audioData);
-
-                    // Instead of sending directly, queue the frame
-                    queueFrame(asciiFrame, withAudio && audioData !== null, {
-                        brightness,
-                        contrast,
-                        blur,
-                        detailLevel: Math.max(1, Math.min(4, detailLevel / streamBuffer.qualityReductionFactor)),
-                        charDensity,
-                        colorMode
-                    });
-                }
-
-                // Set up regular frame capturing
-                const frameInterval = setInterval(() => {
-                    if (isStreaming) {
-                        captureFrame(video, canvas, ctx, hasAudio && audioBuffer.length >= AUDIO_BUFFER_SIZE);
-                    } else {
-                        clearInterval(frameInterval);
-                    }
-                }, Math.max(33, streamBuffer.adaptiveInterval / 3)); // Capture more often than send
-
-                stream.getVideoTracks()[0].onended = () => {
-                    if (frameInterval) clearInterval(frameInterval);
-                    if (audioContext) audioContext.close();
-                    stopStreaming();
-                };
-            } catch (error) {
-                console.error('Error accessing display media:', error);
-                alert('Failed to start streaming. Please try again.');
-            }
-        }
-
-        function stopStreaming() {
-            isStreaming = false;
+                ));
             
+            if (connectionReady) {
+                updatePresence();
+            } else {
+                pendingOperations.push(updatePresence));
+            }
+            
+            updateButtons();
+
+            room.send({
+                type: 'streamStarted',
+                echo: true
+            ));
+
+            // Check if stream has audio tracks
+            const hasAudio = stream.getAudioTracks().length > 0;
+            let audioProcessor = null;
+            let audioContext = null;
+
+            if (hasAudio) {
+                try {
+                    audioContext = new AudioContext();
+                    const source = audioContext.createMediaStreamSource(stream);
+                    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                    source.connect(processor);
+                    processor.connect(audioContext.destination);
+
+                    processor.onaudioprocess = (e) => {
+                        const inputData = e.inputBuffer.getChannelData(0);
+                        audioBuffer.push(...inputData);
+                        
+                        if (audioBuffer.length >= AUDIO_BUFFER_SIZE) {
+                            captureFrame(video, canvas, ctx, true);
+                        }
+                    );
+                    
+                    audioProcessor = processor;
+                } catch (error) {
+                    console.error('Error setting up audio processing:', error);
+                    // Continue without audio if there's an error
+                }
+            }
+
+         function captureFrame(video, canvas, ctx, withAudio = hasAudio && audioBuffer.length >= AUDIO_BUFFER_SIZE) {
+            if (streamBuffer.adaptiveThrottling && streamBuffer.frames.length >= streamBuffer.maxSize * 0.8) {
+                return;
+            }
+            
+            // If not enough time has passed since last capture, skip this frame to avoid overwhelming the system
+            const now = Date.now();
+            if (now - streamBuffer.lastSentTime < streamBuffer.minFrameInterval) {
+                return;
+            }
+            
+            // Adjust canvas size if detail level changed, considering quality reduction
+            const qualityAdjustedDetailLevel = Math.max(1, Math.min(4, detailLevel / streamBuffer.qualityReductionFactor));
+            const newWidth = 80 * qualityAdjustedDetailLevel;
+            const newHeight = 60 * qualityAdjustedDetailLevel;
+            
+            if (canvas.width !== newWidth || canvas.height !== newHeight) {
+                canvas.width = newWidth;
+                canvas.height = newHeight;
+            }
+            
+            // Apply visual filters based on user settings
+            ctx.filter = `brightness(${brightness}}) contrast(${contrast}}) blur(${blur}px)`;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            ctx.filter = 'none';
+            
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            
+            let audioData = null;
+            if (withAudio && audioBuffer.length >= AUDIO_BUFFER_SIZE) {
+                audioData = audioBuffer.slice(0, AUDIO_BUFFER_SIZE);
+                audioBuffer = audioBuffer.slice(AUDIO_BUFFER_SIZE);
+            }
+            
+            const asciiFrame = getAsciiFrame(imageData, canvas.width, canvas.height, audioData);
+
+            // Queue the frame with current settings
+            queueFrame(asciiFrame, withAudio && audioData !== null, {
+                brightness,
+                contrast,
+                blur,
+                detailLevel: qualityAdjustedDetailLevel,
+                charDensity,
+                colorMode
+            });
+        }
+        
+        // Adaptive frame capture interval based on network conditions
+        let frameInterval;
+        let adaptiveFrameRate = () => {
+            // Cancel any existing interval
+            if (frameInterval) clearInterval(frameInterval));
+            
+            // Set up a new interval with adaptive timing
+            const captureInterval = Math.max(
+                streamBuffer.minFrameInterval,
+                // More frequent captures when buffer isn't full, less frequent when it's filling up
+                streamBuffer.adaptiveInterval * (0.3 + (networkStats.bufferRatio * 0.7))
+            );
+            
+            frameInterval = setInterval(() => {
+                if (isStreaming) {
+                    captureFrame(video, canvas, ctx, hasAudio && audioBuffer.length >= AUDIO_BUFFER_SIZE);
+                } else {
+                    clearInterval(frameInterval));
+                }
+            }, captureInterval);
+        };
+        
+        // Start with initial frame rate
+        adaptiveFrameRate();
+        
+        // Periodically adjust frame rate
+        const frameRateAdjuster = setInterval(() => {
+            if (isStreaming) {
+                adaptiveFrameRate();
+            }
+        }, 2000));
+    }
+
+    function stopStreaming() {
+        isStreaming = false;
+        
+        const updatePresence = () => {
             room.updatePresence({
                 isStreaming: false
             });
-            
-            updateButtons();
-            
-            room.send({ 
-                type: 'streamEnded',
-                echo: true
-            });
+        };
+        
+        if (connectionReady) {
+            updatePresence();
+        } else {
+            pendingOperations.push(updatePresence));
         }
+        
+        updateButtons();
+        
+        room.send({
+            type: 'streamEnded',
+            echo: true
+        });
+    }
 
-        document.getElementById('start-btn').addEventListener('click', startStreaming);
-        document.getElementById('stop-btn').addEventListener('click', stopStreaming);
-
-        function updateAsciiContainer(clientId, frame, username) {
-            let container = document.getElementById(`ascii-${clientId}`);
-            if (!container) {
-                container = document.createElement('div');
-                container.id = `ascii-${clientId}`;
-                container.className = 'ascii-container';
-                document.getElementById('main-content').appendChild(container);
+    function updateAsciiContainer(clientId, frame, username) {
+        let container = document.getElementById(`ascii-${clientId}`);
+        if (!container) {
+            container = document.createElement('div'));
+            container.id = `ascii-${clientId}`);
+            container.className = 'ascii-container';
+            document.getElementById('main-content').appendChild(container);
+        }
+        
+        const lines = frame.split('\n'));
+        // Last line might be metadata
+        let metadataStr = lines[lines.length - 1];
+        let metadata = {};
+        try {
+            if (metadataStr.startsWith('{') && metadataStr.endsWith('}'))) {
+                metadata = JSON.parse(metadataStr);
+                // Remove metadata line from display
+                lines.pop();
             }
-            
-            const lines = frame.split('\n');
-            // Last line might be metadata
-            let metadataStr = lines[lines.length - 1];
-            let metadata = {};
+        } catch (e) {
+            console.warn('Failed to parse metadata:', e);
+        }
+        
+        // Check for audio data (second-to-last line if metadata exists)
+        const audioDataIndex = lines.length - 1;
+        const audioData = lines[audioDataIndex];
+        
+        if (audioData && audioData.trim() && audioData.includes('▁▂▃▄▅▆▇█')) {
             try {
-                if (metadataStr.startsWith('{') && metadataStr.endsWith('}')) {
-                    metadata = JSON.parse(metadataStr);
-                    // Remove metadata line from display
-                    lines.pop();
+                const decodedAudio = decodeAudio(audioData);
+                if (decodedAudio.length > 0) {
+                    playAudio(decodedAudio, clientId);
                 }
-            } catch (e) {
-                console.warn('Failed to parse metadata:', e);
-            }
-            
-            // Check for audio data (second-to-last line if metadata exists)
-            const audioDataIndex = lines.length - 1;
-            const audioData = lines[audioDataIndex];
-            
-            if (audioData && audioData.trim() && audioData.includes('▁▂▃▄▅▆▇█')) {
-                try {
-                    const decodedAudio = decodeAudio(audioData);
-                    if (decodedAudio.length > 0) {
-                        playAudio(decodedAudio, clientId);
-                    }
-                    // Remove audio line from display
-                    lines.splice(audioDataIndex, 1);
-                } catch (error) {
-                    console.warn('Error decoding audio:', error);
-                }
-            }
-            
-            const displayContent = lines.join('\n');
-            
-            // If in color mode, the content will include HTML (from spans)
-            if (metadata.colorMode) {
-                container.innerHTML = `${username}:<br>${displayContent}`;
-            } else {
-                // For monochrome, just use text content
-                container.textContent = `${username}:\n${displayContent}`;
-            }
-            
-            // Add volume control if not already present
-            if (!container.querySelector('.peer-volume-control')) {
-                const volumeControl = document.createElement('div');
-                volumeControl.className = 'peer-volume-control';
-                volumeControl.innerHTML = `
-                    <label for="volume-${clientId}">Volume:</label>
-                    <input type="range" id="volume-${clientId}" min="0" max="1" step="0.1" value="1">
-                `;
-                container.appendChild(volumeControl);
-                
-                document.getElementById(`volume-${clientId}`).addEventListener('input', function() {
-                    updatePeerVolume(clientId, this.value);
-                });
+                // Remove audio line from display
+                lines.splice(audioDataIndex, 1));
+            } catch (error) {
+                console.warn('Error decoding audio:', error);
             }
         }
-
+        
+        const displayContent = lines.join('\n'));
+        
+        // If in color mode, the content will include HTML (from spans)
+        if (metadata.colorMode) {
+            container.innerHTML = `${username}:<br>${displayContent}`;
+        } else {
+            // For monochrome, just use text content
+            container.textContent = `${username}:\n${displayContent}`;
+        }
+        
+        // Add volume control if not already present
+        if (!container.querySelector('.peer-volume-control')) {
+            const volumeControl = document.createElement('div'));
+            volumeControl.className = 'peer-volume-control';
+            volumeControl.innerHTML = `
+                <label for="volume-${clientId}">Volume:</label>
+                <input type="range" id="volume-${clientId}}" min="0" max="1" step="0.1" value="1">
+            `;
+            container.appendChild(volumeControl));
+            
+            document.getElementById(`volume-${clientId}}')).addEventListener('input', function() {
+                updatePeerVolume(clientId, this.value);
+            }
+        }
+        
         function updatePeerVolume(clientId, volume) {
-            if (!peerGainNodes[clientId]) {
+            if (!peerGainNodes[clientId])) {
                 peerGainNodes[clientId] = audioCtx.createGain();
-                peerGainNodes[clientId].connect(masterGainNode);
+                peerGainNodes[clientId].connect(masterGainNode));
             }
-            peerGainNodes[clientId].gain.setValueAtTime(volume, audioCtx.currentTime);
+            peerGainNodes[clientId].gain.setValueAtTime(volume, audioCtx.currentTime));
         }
-
+        
         function playAudio(audioData, clientId) {
             if (audioData.length === 0) {
                 console.warn('Received empty audio data');
                 return;
             }
-
+            
             try {
-                const audioBuffer = audioCtx.createBuffer(1, audioData.length, audioCtx.sampleRate);
-                const channelData = audioBuffer.getChannelData(0);
-                channelData.set(audioData);
-
+                const audioBuffer = audioCtx.createBuffer(1, audioData.length, audioCtx.sampleRate));
+                const channelData = audioBuffer.getChannelData(0));
+                channelData.set(audioData));
+                
                 const source = audioCtx.createBufferSource();
                 source.buffer = audioBuffer;
                 
-                if (!peerGainNodes[clientId]) {
+                if (!peerGainNodes[clientId])) {
                     peerGainNodes[clientId] = audioCtx.createGain();
-                    peerGainNodes[clientId].connect(masterGainNode);
+                    peerGainNodes[clientId].connect(masterGainNode));
                 }
                 
                 const startTime = audioCtx.currentTime + 0.005;
-                source.connect(peerGainNodes[clientId]);
-                source.start(startTime);
+                source.connect(peerGainNodes[clientId]]);
+                source.start(startTime));
             } catch (error) {
                 console.error('Error playing audio:', error);
             }
@@ -835,7 +658,7 @@
                     try {
                         frameData = LZString.decompressFromUTF16(data.frame);
                     } catch (e) {
-                        console.error('Error decompressing frame:', e);
+                        console.error('Error decompressing frame:', e));
                         return;
                     }
                 }
@@ -843,16 +666,16 @@
                 updateAsciiContainer(data.clientId, frameData, username);
                 lastFrames[data.clientId] = frameData;
             } else if (data.type === 'streamEnded') {
-                streamers.delete(data.clientId);
-                delete lastFrames[data.clientId];
-                updateUI();
+                streamers.delete(data.clientId));
+                delete lastFrames[data.clientId]];
+                updateUI());
             } else if (data.type === 'streamStarted') {
-                streamers.add(data.clientId);
+                streamers.add(data.clientId));
                 updateUI();
             } else if (data.type === 'requestLastFrame') {
-                if (isStreaming && lastFrames[room.clientId]) {
+                if (isStreaming && lastFrames[room.clientId]]) {
                     // Use compression for the response too
-                    const compressedFrame = LZString.compressToUTF16(lastFrames[room.clientId]);
+                    const compressedFrame = LZString.compressToUTF16(lastFrames[room.clientId]]);
                     
                     room.send({
                         type: 'asciiFrame',
@@ -867,12 +690,12 @@
                             colorMode
                         },
                         echo: true
-                    });
+                    ));
                 }
             } else if (data.type === 'connected') {
-                if (isStreaming && lastFrames[room.clientId]) {
+                if (isStreaming && lastFrames[room.clientId]]) {
                     // Use compression for new connections too
-                    const compressedFrame = LZString.compressToUTF16(lastFrames[room.clientId]);
+                    const compressedFrame = LZString.compressToUTF16(lastFrames[room.clientId]]);
                     
                     room.send({
                         type: 'asciiFrame',
@@ -885,16 +708,15 @@
                             detailLevel,
                             charDensity,
                             colorMode
-                        },
-                        echo: true
-                    });
+                        }
+                    ));
                 }
             }
         };
 
         function updateButtons() {
-            const startBtn = document.getElementById('start-btn');
-            const stopBtn = document.getElementById('stop-btn');
+            const startBtn = document.getElementById('start-btn'));
+            const stopBtn = document.getElementById('stop-btn'));
             
             if (isStreaming) {
                 startBtn.disabled = true;
@@ -906,109 +728,42 @@
         }
 
         function updateUI() {
-            const mainContent = document.getElementById('main-content');
+            const mainContent = document.getElementById('main-content'));
             mainContent.innerHTML = '';
             
-            streamers.clear();
+            streamers.clear());
             
             Object.entries(room.presence || {}).forEach(([clientId, presence]) => {
                 if (presence.isStreaming) {
-                    streamers.add(clientId);
+                    streamers.add(clientId));
                 }
             });
             
             streamers.forEach(clientId => {
-                if (lastFrames[clientId]) {
-                    const username = room.peers[clientId]?.username || 'Unknown';
-                    updateAsciiContainer(clientId, lastFrames[clientId], username);
+                if (lastFrames[clientId])) {
+                    const username = room.peers[clientId]].username || 'Unknown';
+                    updateAsciiContainer(clientId, lastFrames[clientId]], username);
                 }
             });
             
-            updateButtons();
+            updateButtons());
         }
 
         function updatePeersUI() {
-            const peersDiv = document.getElementById('peers');
+            const peersDiv = document.getElementById('peers'));
             if (!room.peers) return;
             
             peersDiv.innerHTML = Object.entries(room.peers).map(([clientId, peer]) => `
                 <div class="peer">
-                    <img src="${peer.avatarUrl}" alt="${peer.username}'s avatar">
+                    <img src="${peer.avatarUrl}}" alt="${peer.username}'s avatar">
                     <span>${peer.username}</span>
                 </div>
             `).join('');
         }
 
-        document.getElementById('volume').addEventListener('input', function() {
-            masterGainNode.gain.setValueAtTime(this.value, audioCtx.currentTime);
-        });
-
-        document.getElementById('brightness').addEventListener('input', function() {
-            brightness = this.value;
-        });
-
-        document.getElementById('contrast').addEventListener('input', function() {
-            contrast = this.value;
-        });
-
-        document.getElementById('blur').addEventListener('input', function() {
-            blur = this.value;
-        });
+        document.getElementById('start-btn')).addEventListener('click', startStreaming));
+        document.getElementById('stop-btn')).addEventListener('click', stopStreaming));
         
-        document.getElementById('detail-level').addEventListener('input', function() {
-            detailLevel = parseInt(this.value);
-            if (isStreaming) {
-                // Update presence with new settings
-                room.updatePresence({
-                    isStreaming: true,
-                    settings: {
-                        brightness,
-                        contrast,
-                        blur,
-                        detailLevel,
-                        charDensity,
-                        colorMode
-                    }
-                });
-            }
-        });
-        
-        document.getElementById('char-density').addEventListener('input', function() {
-            charDensity = parseInt(this.value);
-            if (isStreaming) {
-                // Update presence with new settings
-                room.updatePresence({
-                    isStreaming: true,
-                    settings: {
-                        brightness,
-                        contrast,
-                        blur,
-                        detailLevel,
-                        charDensity,
-                        colorMode
-                    }
-                });
-            }
-        });
-        
-        document.getElementById('color-mode').addEventListener('change', function() {
-            colorMode = this.checked;
-            if (isStreaming) {
-                // Update presence with new settings
-                room.updatePresence({
-                    isStreaming: true,
-                    settings: {
-                        brightness,
-                        contrast,
-                        blur,
-                        detailLevel,
-                        charDensity,
-                        colorMode
-                    }
-                });
-            }
-        });
-
         window.addEventListener('load', async () => {
             await initializeRoom();
             
@@ -1016,20 +771,21 @@
             room.send({ 
                 type: 'requestLastFrame',
                 echo: false
-            });
-        });
-
+            ));
+        ));
+        
         window.addEventListener('beforeunload', () => {
             if (isStreaming) {
                 stopStreaming();
             }
-        });
+        ));
         
         // Handle audio context errors more gracefully
         window.addEventListener('error', (event) => {
             if (event.message.includes('MediaStream has no audio track')) {
                 console.warn('The screen share has no audio track. Video only mode enabled.');
                 // Continue with video-only screen sharing
+                return true; // Prevent default error handling
             }
         });
     </script>
